@@ -33,7 +33,7 @@ func TestNewShouldGatherOptionsFromEnv(t *testing.T) {
 	os.Setenv("DATADOG_MAX_RETRIES", fmt.Sprint(maxRetries))
 
 	// Act
-	hook, err := New(nil, logrus.InfoLevel, nil)
+	hook, err := New(&Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestNewShouldUseProvidedApiKeyOverEnv(t *testing.T) {
 	envApiKey := "env apiKey"
 	os.Setenv("DATADOG_API_KEY", envApiKey)
 	// Act
-	hook, err := New(&apiKey, logrus.InfoLevel, nil)
+	hook, err := New(&Options{ApiKey: &apiKey})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestNewShouldReturnErrorIfNoApiKey(t *testing.T) {
 	os.Setenv("DATADOG_API_KEY", "")
 
 	// Act
-	_, err := New(nil, logrus.InfoLevel, nil)
+	_, err := New(&Options{})
 
 	// Assert
 	if err == nil {
@@ -84,7 +84,7 @@ func TestNewShouldSetMaxRetriesToDefaultIfInvalid(t *testing.T) {
 	apiKey := "apikey"
 
 	// Act
-	hook, err := New(&apiKey, logrus.InfoLevel, nil)
+	hook, err := New(&Options{ApiKey: &apiKey})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestNewGivenRegionNotProvidedShouldSetDatadogEndpointToUS(t *testing.T) {
 	apiKey := "apikey"
 
 	// Act
-	hook, err := New(&apiKey, logrus.InfoLevel, nil)
+	hook, err := New(&Options{ApiKey: &apiKey})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestSendShouldSendLogsToConfiguredDatadogEndpoint(t *testing.T) {
 
 	// Provide a dummy apikey so it doesn't fall over
 	apiKey := "apikey"
-	hook, err := New(&apiKey, logrus.InfoLevel, nil)
+	hook, err := New(&Options{ApiKey: &apiKey})
 	if err != nil {
 		t.Fatal(err)
 	}

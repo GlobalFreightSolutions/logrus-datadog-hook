@@ -19,14 +19,40 @@ Some other behavior can also be controlled via environment variables. All of the
 | `DATADOG_API_KEY` | Is used to set the api key to use to authenticate the log post request, this is only used if the apiKey provided to the `New` method of the `datadog` module is `nil`. Without an api key this integration will not work. | `your-api-key` | true if apiKey is `nil`, otherwise false | No default |
 | `DATADOG_MAX_RETRIES` | This is used to determine how many times a post request should be retried after failure | `3` | false | `5` |
 
-This module can also create a default logger instance which will create an configure the datadog hook. Though the datadog hook is also exposed so you can just use it directly if you wanted to fine tune the configuration.
-
 # Installing the module
 
 ```
-> go get gfsdeliver.com/go/gfs-go-logging
+> go get github.com/GlobalFreightSolutions/logrus-datadog-hook
 ```
 
-## Todo
+# Using the Module
 
-Open source?
+```go
+package main
+
+import (
+  "time"
+
+  "github.com/GlobalFreightSolutions/logrus-datadog-hook/datadog"
+  "github.com/sirupsen/logrus"
+)
+
+func main() {
+  apiKey := "YOUR_API_KEY_HERE"
+  hook, err := datadog.New(&apiKey, logrus.InfoLevel)
+  if err !- nil {
+    panic(err.Error())
+  }
+
+  logger := logrus.New()
+  logger.AddHook(hook)
+  
+  // This ensures that the logger exits gracefully and all buffered logs are sent before closing down
+	logrus.DeferExitHandler(hook.Close)
+
+  for {
+    logger.Info("This is a log sent to datadog")
+    time.Sleep(30 * time.Second)
+  }
+}
+```

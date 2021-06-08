@@ -32,6 +32,10 @@ const (
 	defaultMaxRetries = 5
 )
 
+var (
+	defaultLevel = logrus.InfoLevel
+)
+
 // These options if provided will be added as default tags to each log sent
 type GlobalTags struct {
 	Service     string
@@ -54,6 +58,11 @@ type DatadogHook struct {
 	wg              sync.WaitGroup
 }
 
+type Options struct {
+	ApiKey              *string
+	MinimumLoggingLevel *logrus.Level
+}
+
 func getenvOrDefault(key string, defaultString string) string {
 	if val := os.Getenv(key); val != "" {
 		return val
@@ -66,7 +75,15 @@ func defaultErrorhandler(err error) {
 	logrus.Errorf("The datadog logger hook has encountered an error: %s", err.Error())
 }
 
-func New(apiKey *string, minLevel logrus.Level, errorHandler *func(error)) (*DatadogHook, error) {
+func New(options *Options) (*DatadogHook, error) {
+	if options == nil {
+		options = &Options{}
+	}
+
+	if options.MinimumLoggingLevel == nil {
+		options.MinimumLoggingLevel = &defaultLevel
+	}
+
 	globalTags := &GlobalTags{
 		Service:     getenvOrDefault("SERVICE", "unknown"),
 		Environment: getenvOrDefault("ENVIRONMENT", "unknown"),
@@ -77,12 +94,12 @@ func New(apiKey *string, minLevel logrus.Level, errorHandler *func(error)) (*Dat
 
 	region := os.Getenv("DATADOG_REGION")
 
-	if apiKey == nil {
+	if options.ApiKey == nil {
 		envApiKey := os.Getenv("DATADOG_API_KEY")
-		apiKey = &envApiKey
+		options.ApiKey = &envApiKey
 	}
 
-	if apiKey == nil || *apiKey == "" {
+	if options.ApiKey == nil || *options.ApiKey == "" {
 		return nil, errors.New("apiKey not provided, cannot create datadog hook")
 	}
 
@@ -98,9 +115,9 @@ func New(apiKey *string, minLevel logrus.Level, errorHandler *func(error)) (*Dat
 	}
 
 	hook := &DatadogHook{
-		ApiKey:          *apiKey,
+		ApiKey:          *options.ApiKey,
 		Tags:            globalTags,
-		MinLevel:        minLevel,
+		MinLevel:        *options.MinimumLoggingLevel,
 		datadogEndpoint: endpoint,
 		MaxRetry:        int(maxRetry),
 		entryC:          make(chan logrus.Entry),
@@ -114,11 +131,7 @@ func New(apiKey *string, minLevel logrus.Level, errorHandler *func(error)) (*Dat
 
 	go func() {
 		for err := range hook.errorC {
-			if errorHandler != nil {
-				(*errorHandler)(err)
-			} else {
-				defaultErrorhandler(err)
-			}
+			defaultErrorhandler(err)
 		}
 	}()
 	hook.ticker = time.NewTicker(5 * time.Second)

@@ -1,4 +1,4 @@
-module gfsdeliver.com/go/gfs-go-logging
+module github.com/GlobalFreightSolutions/logrus-datadog-hook
 
 go 1.16
 
