@@ -6,14 +6,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
 )
+
+type endpoint string
 
 const (
 	// The maximum content size per request is 5MB
@@ -25,56 +25,53 @@ const (
 	// The maximum amount of logs that can be sent in a single request is 1000
 	maxLogCount = 1000
 
-	basePath          = "/v1/input"
-	datadogHostUS     = "https://http-intake.logs.datadoghq.com"
-	datadogHostEU     = "https://http-intake.logs.datadoghq.eu"
-	apiKeyHeader      = "DD-API-KEY"
-	defaultMaxRetries = 5
+	basePath                   = "/v1/input"
+	DatadogHostUS     endpoint = "https://http-intake.logs.datadoghq.com"
+	DatadogHostEU     endpoint = "https://http-intake.logs.datadoghq.eu"
+	apiKeyHeader               = "DD-API-KEY"
+	defaultMaxRetries          = 5
 )
 
 var (
-	defaultLevel = logrus.InfoLevel
+	defaultLevel   = logrus.InfoLevel
+	defaultService = "unknown"
+	defaultHost    = "unknown"
+	defaultSource  = "golang"
 )
-
-// These options if provided will be added as default tags to each log sent
-type GlobalTags struct {
-	Service     string
-	Environment string
-	Maintainer  string
-	Application string
-	Hostname    string
-}
 
 type DatadogHook struct {
 	ApiKey          string
-	Tags            *GlobalTags
+	Service         string
+	Hostname        string
+	Source          string
+	Tags            *map[string]string
 	MinLevel        logrus.Level
 	MaxRetry        int
-	datadogEndpoint string
+	DatadogEndpoint endpoint
+	Formatter       logrus.Formatter
 	entryC          chan logrus.Entry
-	errorC          chan error
 	ticker          *time.Ticker
-	formatter       logrus.Formatter
 	wg              sync.WaitGroup
 }
 
 type Options struct {
-	ApiKey              *string
+	// The Datadog Api Key needed to authenticate
+	ApiKey *string
+	// The Minimum level of log to send to datadog, default is logrus.InfoLevel
 	MinimumLoggingLevel *logrus.Level
+	// The datadog endpoint to send logs to, default is DatadogHostUS
+	DatadogEndpoint *endpoint
+	// The Service tag to add to all logs
+	Service *string
+	// The Host tag to add to all logs
+	Host *string
+	// The source tag to add to all logs
+	Source *string
+	// A map of custom tags to add to every log
+	GlobalTags *map[string]string
 }
 
-func getenvOrDefault(key string, defaultString string) string {
-	if val := os.Getenv(key); val != "" {
-		return val
-	}
-
-	return defaultString
-}
-
-func defaultErrorhandler(err error) {
-	logrus.Errorf("The datadog logger hook has encountered an error: %s", err.Error())
-}
-
+// Creates and Starts a new DatadogHook
 func New(options *Options) (*DatadogHook, error) {
 	if options == nil {
 		options = &Options{}
@@ -84,57 +81,45 @@ func New(options *Options) (*DatadogHook, error) {
 		options.MinimumLoggingLevel = &defaultLevel
 	}
 
-	globalTags := &GlobalTags{
-		Service:     getenvOrDefault("SERVICE", "unknown"),
-		Environment: getenvOrDefault("ENVIRONMENT", "unknown"),
-		Maintainer:  getenvOrDefault("MAINTAINER", "unknown"),
-		Application: getenvOrDefault("APPLICATION", "unknown"),
-		Hostname:    getenvOrDefault("HOST", "0.0.0.0"),
-	}
-
-	region := os.Getenv("DATADOG_REGION")
-
-	if options.ApiKey == nil {
-		envApiKey := os.Getenv("DATADOG_API_KEY")
-		options.ApiKey = &envApiKey
-	}
-
 	if options.ApiKey == nil || *options.ApiKey == "" {
 		return nil, errors.New("apiKey not provided, cannot create datadog hook")
 	}
 
-	maxRetry, err := strconv.ParseInt(getenvOrDefault("DATADOG_MAX_RETRIES", "5"), 0, 32)
-	if err != nil {
-		logrus.Errorf("The provided variable DATADOG_MAX_RETRIES was invalid using a default of %d: %s", defaultMaxRetries, err.Error())
-		maxRetry = defaultMaxRetries
+	if options.DatadogEndpoint == nil || *options.DatadogEndpoint == "" {
+		endpoint := DatadogHostUS
+		(*options).DatadogEndpoint = &endpoint
 	}
 
-	endpoint := datadogHostUS
-	if strings.ToLower(region) == "eu" {
-		endpoint = datadogHostEU
+	if options.Service == nil {
+		options.Service = &defaultService
+	}
+
+	if options.Host == nil {
+		options.Host = &defaultHost
+	}
+
+	if options.Source == nil {
+		options.Source = &defaultSource
 	}
 
 	hook := &DatadogHook{
 		ApiKey:          *options.ApiKey,
-		Tags:            globalTags,
+		Service:         *options.Service,
+		Hostname:        *options.Host,
+		Source:          *options.Source,
+		Tags:            options.GlobalTags,
 		MinLevel:        *options.MinimumLoggingLevel,
-		datadogEndpoint: endpoint,
-		MaxRetry:        int(maxRetry),
-		entryC:          make(chan logrus.Entry),
-		errorC:          make(chan error),
-		formatter: &logrus.JSONFormatter{
+		DatadogEndpoint: *options.DatadogEndpoint,
+		MaxRetry:        5,
+		Formatter: &logrus.JSONFormatter{
 			FieldMap: logrus.FieldMap{
 				logrus.FieldKeyMsg: "message",
 			},
 		},
+		ticker: time.NewTicker(5 * time.Second),
+		entryC: make(chan logrus.Entry),
 	}
 
-	go func() {
-		for err := range hook.errorC {
-			defaultErrorhandler(err)
-		}
-	}()
-	hook.ticker = time.NewTicker(5 * time.Second)
 	go hook.batch(hook.ticker.C)
 
 	return hook, nil
@@ -145,7 +130,6 @@ func (h *DatadogHook) Close() {
 	close(h.entryC)
 	h.ticker.Stop()
 	h.wg.Wait()
-	close(h.errorC)
 }
 
 // Levels - implement Hook interface supporting all levels
@@ -159,23 +143,23 @@ func (h *DatadogHook) Fire(entry *logrus.Entry) error {
 	return nil
 }
 
-func (h *DatadogHook) datadogURL() (string, error) {
-	u, err := url.Parse(h.datadogEndpoint + basePath)
+// This function creates the request url
+func (h *DatadogHook) buildUrl() (string, error) {
+	u, err := url.Parse(string(h.DatadogEndpoint) + basePath)
 	if err != nil {
 		return "", err
 	}
 	parameters := url.Values{}
-	o := h.Tags
 	parameters.Add("ddsource", "golang")
-	parameters.Add("service", o.Service)
-	parameters.Add("hostname", o.Hostname)
+	parameters.Add("service", h.Service)
+	parameters.Add("hostname", h.Hostname)
 	var tags []string
-	tags = append(tags, fmt.Sprintf("environment:%s", o.Environment))
-	tags = append(tags, fmt.Sprintf("application:%s", o.Application))
-	tags = append(tags, fmt.Sprintf("service:%s", o.Service))
-	tags = append(tags, fmt.Sprintf("maintainer:%s", o.Maintainer))
-	tags = append(tags, fmt.Sprintf("reference:%s.%s.%s.%s", o.Maintainer, o.Application, o.Service, o.Environment))
-	parameters.Add("ddtags", strings.Join(tags, ","))
+	if h.Tags != nil {
+		for key, value := range *h.Tags {
+			tags = append(tags, fmt.Sprintf("%v:%v", key, value))
+		}
+		parameters.Add("ddtags", strings.Join(tags, ","))
+	}
 	u.RawQuery = parameters.Encode()
 	return u.String(), nil
 }
@@ -187,9 +171,9 @@ func (h *DatadogHook) batch(ticker <-chan time.Time) {
 	h.wg.Add(1)
 	go func() {
 		for entry := range h.entryC {
-			formatted, err := h.formatter.Format(&entry)
+			formatted, err := h.Formatter.Format(&entry)
 			if err != nil {
-				h.errorC <- err
+				fmt.Println(err.Error())
 				return
 			}
 
@@ -200,7 +184,8 @@ func (h *DatadogHook) batch(ticker <-chan time.Time) {
 			}
 
 			if len(formatted) > maxLogSize {
-				h.errorC <- fmt.Errorf("could not send log as it was too large! Maximum size for a single log is %d bytes, this log is %d bytes", maxLogSize, len(formatted))
+				err := fmt.Errorf("could not send log as it was too large! Maximum size for a single log is %d bytes, this log is %d bytes", maxLogSize, len(formatted))
+				fmt.Println(err.Error())
 				return
 			}
 
@@ -245,14 +230,14 @@ func (h *DatadogHook) send(batch [][]byte) {
 		return
 	}
 
-	url, err := h.datadogURL()
+	url, err := h.buildUrl()
 	if err != nil {
-		h.errorC <- err
+		fmt.Println(err.Error())
 		return
 	}
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(buf))
 	if err != nil {
-		h.errorC <- err
+		fmt.Println(err.Error())
 		return
 	}
 
@@ -263,10 +248,11 @@ func (h *DatadogHook) send(batch [][]byte) {
 	i := 0
 	for {
 		resp, err := http.DefaultClient.Do(req)
-		if err != nil || resp.StatusCode > 399 {
+		if err != nil || resp.StatusCode >= 400 {
 			i++
 			if h.MaxRetry < 0 || i >= h.MaxRetry {
-				h.errorC <- fmt.Errorf("failed to send after %d retries", h.MaxRetry)
+				err := fmt.Errorf("failed to send after %d retries", h.MaxRetry)
+				fmt.Println(err.Error())
 				return
 			}
 			continue

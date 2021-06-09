@@ -3,10 +3,8 @@ package datadog
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
@@ -14,63 +12,12 @@ import (
 	"gotest.tools/assert"
 )
 
-func TestNewShouldGatherOptionsFromEnv(t *testing.T) {
-	// Arrange
-	service := "service"
-	environment := "environment"
-	maintainer := "maintainer"
-	application := "application"
-	host := "host"
-	apiKey := "apikey"
-	maxRetries := 11
-	os.Setenv("SERVICE", service)
-	os.Setenv("ENVIRONMENT", environment)
-	os.Setenv("MAINTAINER", maintainer)
-	os.Setenv("APPLICATION", application)
-	os.Setenv("HOST", host)
-	os.Setenv("DATADOG_REGION", "eu")
-	os.Setenv("DATADOG_API_KEY", apiKey)
-	os.Setenv("DATADOG_MAX_RETRIES", fmt.Sprint(maxRetries))
-
-	// Act
-	hook, err := New(&Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Assert
-	assert.Equal(t, hook.Tags.Service, service)
-	assert.Equal(t, hook.Tags.Environment, environment)
-	assert.Equal(t, hook.Tags.Maintainer, maintainer)
-	assert.Equal(t, hook.Tags.Application, application)
-	assert.Equal(t, hook.Tags.Hostname, host)
-	assert.Equal(t, hook.datadogEndpoint, datadogHostEU)
-	assert.Equal(t, hook.ApiKey, apiKey)
-	assert.Equal(t, hook.MaxRetry, maxRetries)
-}
-
-func TestNewShouldUseProvidedApiKeyOverEnv(t *testing.T) {
-	// Arrange
-	apiKey := "apiKey"
-	envApiKey := "env apiKey"
-	os.Setenv("DATADOG_API_KEY", envApiKey)
-	// Act
-	hook, err := New(&Options{ApiKey: &apiKey})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Assert
-	assert.Equal(t, hook.ApiKey, apiKey)
-	assert.Assert(t, hook.ApiKey != envApiKey)
-}
-
 func TestNewShouldReturnErrorIfNoApiKey(t *testing.T) {
 	// Arrange
-	os.Setenv("DATADOG_API_KEY", "")
+	options := &Options{}
 
 	// Act
-	_, err := New(&Options{})
+	_, err := New(options)
 
 	// Assert
 	if err == nil {
@@ -78,9 +25,8 @@ func TestNewShouldReturnErrorIfNoApiKey(t *testing.T) {
 	}
 }
 
-func TestNewShouldSetMaxRetriesToDefaultIfInvalid(t *testing.T) {
+func TestNewShouldSetMaxRetriesToDefault(t *testing.T) {
 	// Arrange
-	os.Setenv("DATADOG_MAX_RETRIES", "INVALID VALUE!!!")
 	apiKey := "apikey"
 
 	// Act
@@ -93,10 +39,8 @@ func TestNewShouldSetMaxRetriesToDefaultIfInvalid(t *testing.T) {
 	assert.Equal(t, hook.MaxRetry, defaultMaxRetries)
 }
 
-func TestNewGivenRegionNotProvidedShouldSetDatadogEndpointToUS(t *testing.T) {
+func TestNewGivenNotProvidedShouldSetOptionsToDefault(t *testing.T) {
 	// Arrange
-	region := ""
-	os.Setenv("DATADOG_REGION", region)
 	apiKey := "apikey"
 
 	// Act
@@ -106,33 +50,49 @@ func TestNewGivenRegionNotProvidedShouldSetDatadogEndpointToUS(t *testing.T) {
 	}
 
 	// Assert
-	assert.Equal(t, hook.datadogEndpoint, datadogHostUS)
+	assert.Equal(t, hook.DatadogEndpoint, DatadogHostUS)
+	assert.Equal(t, hook.MinLevel, defaultLevel)
+	assert.Equal(t, hook.Service, defaultService)
+	assert.Equal(t, hook.Hostname, defaultHost)
+	assert.Equal(t, hook.Source, defaultSource)
 }
 
-func TestGetenvOrDefaultShouldReturnEnvIfExists(t *testing.T) {
+func TestNewShouldSetHookPropertiesAccordingToProvidedOptions(t *testing.T) {
 	// Arrange
-	envKey := "KEY"
-	envValue := "value"
-	os.Setenv(envKey, envValue)
+	apiKey := "apiKey"
+	minLevel := logrus.InfoLevel
+	endpoint := DatadogHostEU
+	service := "Service"
+	host := "Host"
+	source := "Source"
+	options := &Options{
+		ApiKey:              &apiKey,
+		MinimumLoggingLevel: &minLevel,
+		DatadogEndpoint:     &endpoint,
+		Service:             &service,
+		Host:                &host,
+		Source:              &source,
+		GlobalTags: &map[string]string{
+			"Tag": "Value",
+		},
+	}
 
 	// Act
-	res := getenvOrDefault(envKey, "default")
+	hook, err := New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Assert
-	assert.Equal(t, res, envValue)
-}
-
-func TestGetenvOrDefaultShouldReturnDefaultIfNotExists(t *testing.T) {
-	// Arrange
-	envKey := "KEY"
-	os.Setenv(envKey, "")
-	defaultValue := "defaultValue"
-
-	// Act
-	res := getenvOrDefault(envKey, defaultValue)
-
-	// Assert
-	assert.Equal(t, res, defaultValue)
+	assert.Equal(t, hook.ApiKey, apiKey)
+	assert.Equal(t, hook.MinLevel, minLevel)
+	assert.Equal(t, hook.DatadogEndpoint, endpoint)
+	assert.Equal(t, hook.Service, service)
+	assert.Equal(t, hook.Hostname, host)
+	assert.Equal(t, hook.Source, source)
+	tag, ok := (*hook.Tags)["Tag"]
+	assert.Assert(t, ok, "Tags should have tag `Tag`")
+	assert.Equal(t, tag, "Value")
 }
 
 func TestSendShouldSendLogsToConfiguredDatadogEndpoint(t *testing.T) {
@@ -164,7 +124,7 @@ func TestSendShouldSendLogsToConfiguredDatadogEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	hook.datadogEndpoint = server.URL
+	hook.DatadogEndpoint = endpoint(server.URL)
 	logger.AddHook(hook)
 	logrus.DeferExitHandler(hook.Close)
 
