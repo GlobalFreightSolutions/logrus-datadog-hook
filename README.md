@@ -40,7 +40,7 @@ import (
 func main() {
   apiKey := "YOUR_API_KEY_HERE"
   hook, err := datadog.New(&apiKey, logrus.InfoLevel)
-  if err !- nil {
+  if err != nil {
     panic(err.Error())
   }
 
