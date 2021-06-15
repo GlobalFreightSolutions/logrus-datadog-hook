@@ -20,7 +20,7 @@ package main
 import (
   "time"
 
-  "github.com/GlobalFreightSolutions/logrus-datadog-hook/datadog"
+  datadog "github.com/GlobalFreightSolutions/logrus-datadog-hook"
   "github.com/sirupsen/logrus"
 )
 
