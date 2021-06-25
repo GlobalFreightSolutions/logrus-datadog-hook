@@ -211,9 +211,11 @@ func (h *DatadogHook) batch(ticker <-chan time.Time) {
 					size = 0
 				}
 			case <-h.done:
-				// Stopping the hook, try and send any buffered entries
-				h.send(batch)
-				return
+				{
+					// Stopping the hook, try and send any buffered entries
+					h.send(batch)
+					return
+				}
 			}
 		}
 	}()
