@@ -52,6 +52,7 @@ type DatadogHook struct {
 	entryC          chan logrus.Entry
 	ticker          *time.Ticker
 	wg              sync.WaitGroup
+	done            chan bool
 }
 
 type Options struct {
@@ -87,7 +88,7 @@ func New(options *Options) (*DatadogHook, error) {
 
 	if options.DatadogEndpoint == nil || *options.DatadogEndpoint == "" {
 		endpoint := DatadogHostUS
-		(*options).DatadogEndpoint = &endpoint
+		options.DatadogEndpoint = &endpoint
 	}
 
 	if options.Service == nil {
@@ -118,6 +119,8 @@ func New(options *Options) (*DatadogHook, error) {
 		},
 		ticker: time.NewTicker(5 * time.Second),
 		entryC: make(chan logrus.Entry),
+		wg:     sync.WaitGroup{},
+		done:   make(chan bool),
 	}
 
 	go hook.batch(hook.ticker.C)
@@ -129,7 +132,9 @@ func New(options *Options) (*DatadogHook, error) {
 func (h *DatadogHook) Close() {
 	close(h.entryC)
 	h.ticker.Stop()
+	h.done <- true
 	h.wg.Wait()
+	close(h.done)
 }
 
 // Levels - implement Hook interface supporting all levels
@@ -170,6 +175,7 @@ func (h *DatadogHook) batch(ticker <-chan time.Time) {
 	size := 0
 	h.wg.Add(1)
 	go func() {
+		defer h.wg.Done()
 		for entry := range h.entryC {
 			formatted, err := h.Formatter.Format(&entry)
 			if err != nil {
@@ -192,16 +198,26 @@ func (h *DatadogHook) batch(ticker <-chan time.Time) {
 			batch = append(batch, formatted)
 			size += len(formatted)
 		}
-		h.wg.Done()
 	}()
 	h.wg.Add(1)
 	go func() {
-		for range ticker {
-			h.send(batch)
-			batch = make([][]byte, 0, maxLogCount)
-			size = 0
+		defer h.wg.Done()
+		for {
+			select {
+			case <-ticker:
+				{
+					h.send(batch)
+					batch = make([][]byte, 0, maxLogCount)
+					size = 0
+				}
+			case <-h.done:
+				{
+					// Stopping the hook, try and send any buffered entries
+					h.send(batch)
+					return
+				}
+			}
 		}
-		h.wg.Done()
 	}()
 }
 
