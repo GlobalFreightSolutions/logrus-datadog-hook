@@ -33,26 +33,28 @@ const (
 )
 
 var (
-	defaultLevel   = logrus.InfoLevel
-	defaultService = "unknown"
-	defaultHost    = "unknown"
-	defaultSource  = "golang"
+	defaultLevel          = logrus.InfoLevel
+	defaultService        = "unknown"
+	defaultHost           = "unknown"
+	defaultSource         = "golang"
+	defaultClientBatching = true
 )
 
 type DatadogHook struct {
-	ApiKey          string
-	Service         string
-	Hostname        string
-	Source          string
-	Tags            *map[string]string
-	MinLevel        logrus.Level
-	MaxRetry        int
-	DatadogEndpoint endpoint
-	Formatter       logrus.Formatter
-	entryC          chan logrus.Entry
-	ticker          *time.Ticker
-	wg              sync.WaitGroup
-	done            chan bool
+	ApiKey                string
+	Service               string
+	Hostname              string
+	Source                string
+	Tags                  *map[string]string
+	ClientBatchingEnabled bool
+	MinLevel              logrus.Level
+	MaxRetry              int
+	DatadogEndpoint       endpoint
+	Formatter             logrus.Formatter
+	entryC                chan logrus.Entry
+	ticker                *time.Ticker
+	wg                    sync.WaitGroup
+	done                  chan bool
 }
 
 type Options struct {
@@ -70,12 +72,18 @@ type Options struct {
 	Source *string
 	// A map of custom tags to add to every log
 	GlobalTags *map[string]string
+	// Controls whether logs are batched locally before sending to Datadog; Defaults to true
+	ClientBatchingEnabled *bool
 }
 
 // Creates and Starts a new DatadogHook
 func New(options *Options) (*DatadogHook, error) {
 	if options == nil {
 		options = &Options{}
+	}
+
+	if options.ClientBatchingEnabled == nil {
+		options.ClientBatchingEnabled = &defaultClientBatching
 	}
 
 	if options.MinimumLoggingLevel == nil {
@@ -104,14 +112,15 @@ func New(options *Options) (*DatadogHook, error) {
 	}
 
 	hook := &DatadogHook{
-		ApiKey:          *options.ApiKey,
-		Service:         *options.Service,
-		Hostname:        *options.Host,
-		Source:          *options.Source,
-		Tags:            options.GlobalTags,
-		MinLevel:        *options.MinimumLoggingLevel,
-		DatadogEndpoint: *options.DatadogEndpoint,
-		MaxRetry:        5,
+		ApiKey:                *options.ApiKey,
+		Service:               *options.Service,
+		Hostname:              *options.Host,
+		Source:                *options.Source,
+		Tags:                  options.GlobalTags,
+		ClientBatchingEnabled: *options.ClientBatchingEnabled,
+		MinLevel:              *options.MinimumLoggingLevel,
+		DatadogEndpoint:       *options.DatadogEndpoint,
+		MaxRetry:              5,
 		Formatter: &logrus.JSONFormatter{
 			FieldMap: logrus.FieldMap{
 				logrus.FieldKeyMsg: "message",
@@ -123,7 +132,9 @@ func New(options *Options) (*DatadogHook, error) {
 		done:   make(chan bool),
 	}
 
-	go hook.batch(hook.ticker.C)
+	if hook.ClientBatchingEnabled {
+		go hook.batch(hook.ticker.C)
+	}
 
 	return hook, nil
 }
@@ -144,7 +155,18 @@ func (h *DatadogHook) Levels() []logrus.Level {
 
 // Fire - implement Hook interface fire the entry
 func (h *DatadogHook) Fire(entry *logrus.Entry) error {
-	h.entryC <- *entry
+	if h.ClientBatchingEnabled {
+		h.entryC <- *entry
+	} else {
+		formatted, err := h.Formatter.Format(entry)
+		if err != nil {
+			return err
+		}
+
+		// Batching is disabled, just send the single log now
+		h.send([][]byte{formatted})
+	}
+
 	return nil
 }
 
