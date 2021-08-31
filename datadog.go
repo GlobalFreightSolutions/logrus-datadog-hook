@@ -143,7 +143,7 @@ func New(options *Options) (*DatadogHook, error) {
 func (h *DatadogHook) Close() {
 	close(h.entryC)
 	h.ticker.Stop()
-	h.done <- true
+	go func() { h.done <- true }()
 	h.wg.Wait()
 	close(h.done)
 }
