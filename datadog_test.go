@@ -139,3 +139,56 @@ func TestSendShouldSendLogsToConfiguredDatadogEndpoint(t *testing.T) {
 	// Wait a hot second for the goroutine to send the log batch
 	time.Sleep(10 * time.Second)
 }
+
+func TestSendShouldSendLogsToConfiguredDatadogEndpointNoBatching(t *testing.T) {
+
+	// Arrange
+
+	sentLogCounter := 3
+
+	server := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		rw.Write([]byte("Ok"))
+
+		decoder := json.NewDecoder(r.Body)
+		var logs []map[string]string
+		decoder.Decode(&logs)
+		assert.Assert(t, len(logs) == 1)
+		for _, log := range logs {
+			message, ok := log["message"]
+			assert.Assert(t, ok, "log should have `message` property")
+			assert.Assert(t, len(message) > 0, "message should have length greater than 0")
+			level, ok := log["level"]
+			assert.Assert(t, ok, "log should have `level` property")
+			assert.Assert(t, len(level) > 0, "level should have length greater than 0")
+			assert.Assert(t, level == "info" || level == "warning" || level == "error", "level should be either info, warning or error")
+		}
+		sentLogCounter = sentLogCounter - 1
+	}))
+	defer server.Close()
+	logger := logrus.New()
+
+	// Provide a dummy apikey so it doesn't fall over
+	apiKey := "apikey"
+	hook, err := New(&Options{
+		ApiKey:                &apiKey,
+		ClientBatchingEnabled: &[]bool{false}[0],
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	hook.DatadogEndpoint = endpoint(server.URL)
+	logger.AddHook(hook)
+	logrus.DeferExitHandler(hook.Close)
+
+	// Act
+	logger.WithFields(logrus.Fields{
+		"Field": "Value",
+	}).Info("This is a log message!")
+	logger.WithFields(logrus.Fields{
+		"Field": "Value",
+	}).Warn("This is another log message!")
+	logger.WithField("error", errors.New("This is the message from an error").Error()).Error("Oh lawd something went wrong")
+
+	assert.Assert(t, sentLogCounter == 0, "Logs were not sent unbatched as 3 seperate occurances")
+}
