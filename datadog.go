@@ -28,6 +28,7 @@ const (
 	basePath                   = "/v1/input"
 	DatadogHostUS     endpoint = "https://http-intake.logs.datadoghq.com"
 	DatadogHostEU     endpoint = "https://http-intake.logs.datadoghq.eu"
+	DatadogHostUSGOV  endpoint = "http-intake.logs.ddog-gov.com"
 	apiKeyHeader               = "DD-API-KEY"
 	defaultMaxRetries          = 5
 )
